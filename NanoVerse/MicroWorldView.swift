@@ -18,26 +18,45 @@ class MicroWorldCoordinator: ObservableObject {
     private var cancellable: EventSubscription?
     
     /// Reusable function to speak any text using text-to-speech
-    func speak(_ text: String) {
-        // Stop any current speech
-        if speechSynthesizer.isSpeaking {
-            speechSynthesizer.stopSpeaking(at: .immediate)
+    func speak(_ text: String, isImmersiveSpaceOpen: Bool) {
+        // Only speak if the immersive space is open
+        guard isImmersiveSpaceOpen else {
+            print("🔇 Speech disabled - immersive space not open")
+            return
         }
         
-        // Create speech utterance
-        let utterance = AVSpeechUtterance(string: text)
-        utterance.voice = AVSpeechSynthesisVoice(language: "en-US")
-        utterance.rate = 0.5
-        utterance.pitchMultiplier = 1.0
-        utterance.volume = 0.8
+        // Safety check for empty text
+        guard !text.isEmpty else {
+            print("🔇 Speech disabled - empty text")
+            return
+        }
         
-        // Speak the text
-        isSpeaking = true
-        speechSynthesizer.speak(utterance)
-        
-        // Reset speaking state when finished
-        DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) {
-            self.isSpeaking = false
+        do {
+            // Stop any current speech
+            if speechSynthesizer.isSpeaking {
+                speechSynthesizer.stopSpeaking(at: .immediate)
+            }
+            
+            // Create speech utterance
+            let utterance = AVSpeechUtterance(string: text)
+            utterance.voice = AVSpeechSynthesisVoice(language: "en-US")
+            utterance.rate = 0.5
+            utterance.pitchMultiplier = 1.0
+            utterance.volume = 0.8
+            
+            // Speak the text
+            isSpeaking = true
+            speechSynthesizer.speak(utterance)
+            
+            // Reset speaking state when finished
+            DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) {
+                self.isSpeaking = false
+            }
+            
+            print("🔊 Speaking: \(text)")
+        } catch {
+            print("❌ Speech synthesis error: \(error)")
+            isSpeaking = false
         }
     }
     
@@ -68,24 +87,19 @@ class MicroWorldCoordinator: ObservableObject {
             print("❌ Model file not found in bundle: \(modelName).usdz")
         }
         
-        // First, let's add a simple test sphere to make sure RealityView is working
+        // Load the actual model
         Task { @MainActor in
-            print("🎯 Creating test sphere...")
+            // Add a large black sphere as background
+            let backgroundMesh = MeshResource.generateSphere(radius: 5)
+            let blackMaterial = SimpleMaterial(color: .black, isMetallic: false)
+            let backgroundEntity = ModelEntity(mesh: backgroundMesh, materials: [blackMaterial])
+            backgroundEntity.name = "blackBackgroundSphere"
+            backgroundEntity.position = [0, 0, 0]
             
-            // Create a simple red sphere as a test
-            let testMesh = MeshResource.generateSphere(radius: 0.1)
-            let testMaterial = SimpleMaterial(color: .red, isMetallic: false)
-            let testEntity = ModelEntity(mesh: testMesh, materials: [testMaterial])
-            testEntity.name = "testSphere"
-            testEntity.position = [0, 0, -0.5] // Closer to the user
+            let backgroundAnchor = AnchorEntity(world: .zero)
+            backgroundAnchor.addChild(backgroundEntity)
+            content.add(backgroundAnchor)
             
-            let testAnchor = AnchorEntity(world: .zero)
-            testAnchor.addChild(testEntity)
-            content.add(testAnchor)
-            
-            print("✅ Test sphere added at position: \(testEntity.position)")
-            
-            // Now try to load the actual model
             do {
                 print("📦 Loading \(modelName) model...")
                 let entity = try await Entity(named: modelName, in: Bundle.main)
@@ -128,11 +142,11 @@ class MicroWorldCoordinator: ObservableObject {
         print("🔧 Creating fallback sphere...")
         
         Task { @MainActor in
-            // Create a sphere to represent a white blood cell
-            let cellMesh = MeshResource.generateSphere(radius: 0.2)
+            // Create a smaller sphere to represent a white blood cell
+            let cellMesh = MeshResource.generateSphere(radius: 0.1)
             
-            // Create a bright cyan material for the cell
-            let cellMaterial = SimpleMaterial(color: .cyan, isMetallic: false)
+            // Create a subtle white material for the cell
+            let cellMaterial = SimpleMaterial(color: .white, isMetallic: false)
             
             // Create the cell entity
             let cellEntity = ModelEntity(mesh: cellMesh, materials: [cellMaterial])
@@ -175,26 +189,17 @@ class MicroWorldCoordinator: ObservableObject {
 struct MicroWorldView: View {
     @ObservedObject var modelManager: NanoVerseModelManager
     @StateObject private var coordinator = MicroWorldCoordinator()
+    @Environment(AppModel.self) private var appModel
     
     var body: some View {
         ZStack {
             // 3D RealityKit scene: Minimal test
             RealityView { content in
                 print("🎬 RealityView content closure called!")
-
-                // Add a simple red test cube
-                let testMesh = MeshResource.generateBox(size: 0.3)
-                let testMaterial = SimpleMaterial(color: .red, isMetallic: false)
-                let testEntity = ModelEntity(mesh: testMesh, materials: [testMaterial])
-                testEntity.position = [0, 0, -1.0]
-
-                let testAnchor = AnchorEntity(world: .zero)
-                testAnchor.addChild(testEntity)
-                content.add(testAnchor)
-
-                print("✅ Test cube added to RealityView at position: \(testEntity.position)")
+                
+                coordinator.setup(content: content, scene: appModel.currentScene)
             }
-            .id(modelManager.currentScene) // Force recreation when scene changes
+            .id(appModel.currentScene)
 
             // Overlay UI
             VStack {
@@ -205,7 +210,7 @@ struct MicroWorldView: View {
                         .fontWeight(.bold)
                         .foregroundStyle(.yellow)
                     
-                    Text("Scene: \(modelManager.currentScene.rawValue)")
+                    Text("Scene: \(appModel.currentScene.rawValue)")
                         .font(.caption)
                         .foregroundStyle(.white)
                     
@@ -214,6 +219,10 @@ struct MicroWorldView: View {
                         .foregroundStyle(.white)
                     
                     Text("Speaking: \(coordinator.isSpeaking ? "Yes" : "No")")
+                        .font(.caption)
+                        .foregroundStyle(.white)
+                    
+                    Text("Immersive Space: \(appModel.immersiveSpaceState == .open ? "Open" : "Closed")")
                         .font(.caption)
                         .foregroundStyle(.white)
                 }
@@ -226,7 +235,7 @@ struct MicroWorldView: View {
                 
                 // Top status bar
                 HStack {
-                    Text(modelManager.currentScene.rawValue)
+                    Text(appModel.currentScene.rawValue)
                         .font(.headline)
                         .fontWeight(.semibold)
                         .foregroundStyle(.white)
@@ -276,15 +285,15 @@ struct MicroWorldView: View {
                 HStack(spacing: 12) {
                     ForEach(AppModel.MicroWorldScene.allCases, id: \.self) { scene in
                         Button {
-                            modelManager.currentScene = scene
+                            appModel.currentScene = scene
                         } label: {
                             Text(scene.rawValue)
                                 .font(.caption)
                                 .fontWeight(.medium)
-                                .foregroundStyle(modelManager.currentScene == scene ? .white : .gray)
+                                .foregroundStyle(appModel.currentScene == scene ? .white : .gray)
                                 .padding(.horizontal, 12)
                                 .padding(.vertical, 8)
-                                .background(modelManager.currentScene == scene ? .blue : .black.opacity(0.3))
+                                .background(appModel.currentScene == scene ? .blue : .black.opacity(0.3))
                                 .cornerRadius(8)
                         }
                     }
@@ -294,7 +303,9 @@ struct MicroWorldView: View {
                 // Bottom controls
                 HStack {
                     Button {
-                        coordinator.speak(modelManager.currentScene.description)
+                        // Safety check to ensure we have a valid scene
+                        let sceneDescription = appModel.currentScene.description
+                        coordinator.speak(sceneDescription, isImmersiveSpaceOpen: appModel.immersiveSpaceState == .open)
                     } label: {
                         HStack {
                             Image(systemName: "speaker.wave.2.fill")
@@ -316,10 +327,15 @@ struct MicroWorldView: View {
             }
         }
         .onAppear {
-            // Optionally, keep the narration logic
+            appModel.immersiveSpaceState = .open
+            // Only play narration if immersive space is open
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
-                coordinator.speak(modelManager.currentScene.description)
+                let sceneDescription = appModel.currentScene.description
+                coordinator.speak(sceneDescription, isImmersiveSpaceOpen: appModel.immersiveSpaceState == .open)
             }
+        }
+        .onDisappear {
+            appModel.immersiveSpaceState = .closed
         }
     }
 }

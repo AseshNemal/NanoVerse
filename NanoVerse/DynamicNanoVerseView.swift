@@ -12,19 +12,21 @@ struct DynamicNanoVerseView: View {
     @ObservedObject var modelManager: NanoVerseModelManager
     @State private var showDocumentPicker = false
     @State private var remoteURLString = ""
-    @State private var showImmersive = false
+    @Environment(\.openImmersiveSpace) private var openImmersiveSpace
     
     var body: some View {
         NavigationStack {
             ScrollView {
                 VStack(spacing: 24) {
                     Button(action: {
-                        showImmersive = true
+                        Task {
+                            await openImmersiveSpace(id: "NanoVerseImmersiveSpace")
+                        }
                     }) {
                         HStack {
-                            Image(systemName: "play.circle.fill")
+                            Image(systemName: "arkit")
                                 .font(.system(size: 36))
-                            Text("Start Immersive")
+                            Text("Enter 3D Immersive Space")
                                 .font(.title)
                                 .fontWeight(.bold)
                         }
@@ -68,27 +70,11 @@ struct DynamicNanoVerseView: View {
                     }
                     
                     Spacer()
-                    
-                    // Enter immersive space
-                    Button {
-                        showImmersive = true
-                    } label: {
-                        Label("Enter Immersive Space", systemImage: "arkit")
-                            .font(.title2)
-                            .fontWeight(.bold)
-                            .padding()
-                            .background(.blue)
-                            .foregroundStyle(.white)
-                            .cornerRadius(16)
-                    }
                 }
                 .frame(maxWidth: .infinity)
                 .padding()
             }
             .navigationTitle("NanoVerse")
-            .sheet(isPresented: $showImmersive) {
-                DynamicNanoVerseImmersiveView(modelManager: modelManager)
-            }
         }
     }
 }
