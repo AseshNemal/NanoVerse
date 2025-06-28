@@ -9,31 +9,17 @@ import SwiftUI
 
 @main
 struct NanoVerseApp: App {
-    
-    @State private var appModel = AppModel()
-    @State private var avPlayerViewModel = AVPlayerViewModel()
+    @StateObject private var modelManager = NanoVerseModelManager()
     
     var body: some Scene {
+        // Main window for app controls and navigation
         WindowGroup {
-            if avPlayerViewModel.isPlaying {
-                AVPlayerView(viewModel: avPlayerViewModel)
-            } else {
-                ContentView()
-                    .environment(appModel)
-            }
+            DynamicNanoVerseView(modelManager: modelManager)
         }
         
-        ImmersiveSpace(id: appModel.immersiveSpaceID) {
-            ImmersiveView()
-                .environment(appModel)
-                .onAppear {
-                    appModel.immersiveSpaceState = .open
-                    avPlayerViewModel.play()
-                }
-                .onDisappear {
-                    appModel.immersiveSpaceState = .closed
-                    avPlayerViewModel.reset()
-                }
+        // Immersive space for the 3D microscopic world
+        ImmersiveSpace(id: "NanoVerseImmersiveSpace") {
+            DynamicNanoVerseImmersiveView(modelManager: modelManager)
         }
         .immersionStyle(selection: .constant(.full), in: .full)
     }

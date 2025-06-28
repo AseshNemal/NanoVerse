@@ -22,16 +22,16 @@ struct ToggleImmersiveSpaceButton: View {
                         appModel.immersiveSpaceState = .inTransition
                         await dismissImmersiveSpace()
                         // Don't set immersiveSpaceState to .closed because there
-                        // are multiple paths to ImmersiveView.onDisappear().
-                        // Only set .closed in ImmersiveView.onDisappear().
+                        // are multiple paths to MicroWorldView.onDisappear().
+                        // Only set .closed in MicroWorldView.onDisappear().
 
                     case .closed:
                         appModel.immersiveSpaceState = .inTransition
                         switch await openImmersiveSpace(id: appModel.immersiveSpaceID) {
                             case .opened:
                                 // Don't set immersiveSpaceState to .open because there
-                                // may be multiple paths to ImmersiveView.onAppear().
-                                // Only set .open in ImmersiveView.onAppear().
+                                // may be multiple paths to MicroWorldView.onAppear().
+                                // Only set .open in MicroWorldView.onAppear().
                                 break
 
                             case .userCancelled, .error:
@@ -49,10 +49,19 @@ struct ToggleImmersiveSpaceButton: View {
                 }
             }
         } label: {
-            Text(appModel.immersiveSpaceState == .open ? "Hide Immersive Space" : "Show Immersive Space")
+            HStack {
+                Image(systemName: appModel.immersiveSpaceState == .open ? "eye.slash.fill" : "eye.fill")
+                Text(appModel.immersiveSpaceState == .open ? "Exit NanoVerse" : "Enter NanoVerse")
+            }
+            .font(.title2)
+            .fontWeight(.semibold)
+            .foregroundStyle(.white)
+            .padding()
+            .frame(maxWidth: .infinity)
+            .background(appModel.immersiveSpaceState == .open ? .red : .blue)
+            .cornerRadius(12)
         }
         .disabled(appModel.immersiveSpaceState == .inTransition)
-        .animation(.none, value: 0)
-        .fontWeight(.semibold)
+        .animation(.easeInOut, value: appModel.immersiveSpaceState)
     }
 }
