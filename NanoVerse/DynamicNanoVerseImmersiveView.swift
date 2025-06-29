@@ -14,5 +14,6 @@ struct DynamicNanoVerseImmersiveView: View {
     var body: some View {
         MicroWorldView(modelManager: modelManager)
             .ignoresSafeArea()
+            .environment(\.colorScheme, .dark)
     }
 } 

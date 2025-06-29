@@ -21,6 +21,7 @@ struct NanoVerseApp: App {
         ImmersiveSpace(id: "NanoVerseImmersiveSpace") {
             DynamicNanoVerseImmersiveView(modelManager: modelManager)
                 .environment(appModel)
+                .environment(\.colorScheme, .dark)
         }
     }
 }

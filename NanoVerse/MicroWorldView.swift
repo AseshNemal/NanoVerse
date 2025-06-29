@@ -9,6 +9,7 @@ import SwiftUI
 import RealityKit
 import AVFoundation
 import Combine
+import RealityKitContent
 
 /// Main 3D scene coordinator for the microscopic world
 class MicroWorldCoordinator: ObservableObject {
@@ -360,16 +361,78 @@ struct MicroWorldView: View {
     
     /// Create a completely isolated environment that blocks the room
     private func createIsolatedEnvironment(content: RealityViewContent) {
-        print("🌑 Creating isolated environment with BlackSphere.usdz...")
+        print("🌑 Creating isolated environment with black background...")
         Task { @MainActor in
-            // Load the large black sky sphere (must be in the app bundle)
-            if let blackSky = try? await Entity(named: "BlackSphere", in: .main) {
-                blackSky.transform.scale = [50, 50, 50] // Make it very large
-                content.add(blackSky)
-                print("✅ BlackSphere.usdz loaded and added as background")
+            // Method 1: Create a large black sphere to block the room view
+            let blackSphereMesh = MeshResource.generateSphere(radius: 100.0)
+            let blackMaterial = SimpleMaterial(color: .black, isMetallic: false)
+            let blackSphere = ModelEntity(mesh: blackSphereMesh, materials: [blackMaterial])
+            blackSphere.name = "BlackBackground"
+            
+            // Add the black sphere to the scene
+            content.add(blackSphere)
+            print("✅ Black background sphere created and added to scene")
+            
+            // Method 2: Try to load the SkyDome from RealityKitContent bundle
+            if let skyDome = try? await Entity(named: "SkyDome", in: realityKitContentBundle) {
+                skyDome.transform.scale = [10, 10, 10] // Make it large
+                content.add(skyDome)
+                print("✅ SkyDome.usdz loaded from RealityKitContent bundle")
             } else {
-                print("❌ Could not load BlackSphere.usdz. Make sure it is in your app bundle.")
+                print("ℹ️ SkyDome.usdz not found in RealityKitContent bundle")
+                
+                // Fallback: try to load from main bundle
+                if let skyDome = try? await Entity(named: "SkyDome", in: .main) {
+                    skyDome.transform.scale = [10, 10, 10]
+                    content.add(skyDome)
+                    print("✅ SkyDome.usdz loaded from main bundle")
+                } else {
+                    print("ℹ️ SkyDome.usdz not found in main bundle either")
+                }
             }
+            
+            // Method 3: Create additional black walls to ensure complete room blocking
+            let wallMaterial = SimpleMaterial(color: .black, isMetallic: false)
+            
+            // Create floor
+            let floorMesh = MeshResource.generatePlane(width: 200, depth: 200)
+            let floor = ModelEntity(mesh: floorMesh, materials: [wallMaterial])
+            floor.position = [0, -50, 0]
+            content.add(floor)
+            
+            // Create ceiling
+            let ceiling = ModelEntity(mesh: floorMesh, materials: [wallMaterial])
+            ceiling.position = [0, 50, 0]
+            ceiling.transform.rotation = simd_quatf(angle: .pi, axis: [1, 0, 0])
+            content.add(ceiling)
+            
+            // Create walls (4 walls around the user)
+            let wallMesh = MeshResource.generatePlane(width: 200, height: 100)
+            
+            // Front wall
+            let frontWall = ModelEntity(mesh: wallMesh, materials: [wallMaterial])
+            frontWall.position = [0, 0, -50]
+            content.add(frontWall)
+            
+            // Back wall
+            let backWall = ModelEntity(mesh: wallMesh, materials: [wallMaterial])
+            backWall.position = [0, 0, 50]
+            backWall.transform.rotation = simd_quatf(angle: .pi, axis: [0, 1, 0])
+            content.add(backWall)
+            
+            // Left wall
+            let leftWall = ModelEntity(mesh: wallMesh, materials: [wallMaterial])
+            leftWall.position = [-50, 0, 0]
+            leftWall.transform.rotation = simd_quatf(angle: .pi/2, axis: [0, 1, 0])
+            content.add(leftWall)
+            
+            // Right wall
+            let rightWall = ModelEntity(mesh: wallMesh, materials: [wallMaterial])
+            rightWall.position = [50, 0, 0]
+            rightWall.transform.rotation = simd_quatf(angle: -.pi/2, axis: [0, 1, 0])
+            content.add(rightWall)
+            
+            print("✅ Additional black walls created for complete environment isolation")
         }
     }
 }
