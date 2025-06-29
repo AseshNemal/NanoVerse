@@ -89,17 +89,6 @@ class MicroWorldCoordinator: ObservableObject {
         
         // Load the actual model
         Task { @MainActor in
-            // Add a large black sphere as background
-            let backgroundMesh = MeshResource.generateSphere(radius: 5)
-            let blackMaterial = SimpleMaterial(color: .black, isMetallic: false)
-            let backgroundEntity = ModelEntity(mesh: backgroundMesh, materials: [blackMaterial])
-            backgroundEntity.name = "blackBackgroundSphere"
-            backgroundEntity.position = [0, 0, 0]
-            
-            let backgroundAnchor = AnchorEntity(world: .zero)
-            backgroundAnchor.addChild(backgroundEntity)
-            content.add(backgroundAnchor)
-            
             do {
                 print("📦 Loading \(modelName) model...")
                 let entity = try await Entity(named: modelName, in: Bundle.main)
@@ -190,16 +179,25 @@ struct MicroWorldView: View {
     @ObservedObject var modelManager: NanoVerseModelManager
     @StateObject private var coordinator = MicroWorldCoordinator()
     @Environment(AppModel.self) private var appModel
+    @Environment(\.dismissImmersiveSpace) private var dismissImmersiveSpace
     
     var body: some View {
         ZStack {
-            // 3D RealityKit scene: Minimal test
+            // Use RealityView with custom scene setup
             RealityView { content in
                 print("🎬 RealityView content closure called!")
                 
+                // Create a completely isolated environment
+                createIsolatedEnvironment(content: content)
+                
+                // Load the model
                 coordinator.setup(content: content, scene: appModel.currentScene)
+            } update: { content in
+                // Handle updates if needed
+                print("🔄 RealityView update called!")
             }
             .id(appModel.currentScene)
+            .environment(\.colorScheme, .dark) // Force dark environment
 
             // Overlay UI
             VStack {
@@ -233,7 +231,7 @@ struct MicroWorldView: View {
                 
                 Spacer()
                 
-                // Top status bar
+                // Top status bar with exit button
                 HStack {
                     Text(appModel.currentScene.rawValue)
                         .font(.headline)
@@ -245,6 +243,27 @@ struct MicroWorldView: View {
                         .cornerRadius(20)
                     
                     Spacer()
+                    
+                    // Exit button
+                    Button {
+                        Task { @MainActor in
+                            appModel.immersiveSpaceState = .inTransition
+                            await dismissImmersiveSpace()
+                        }
+                    } label: {
+                        HStack(spacing: 8) {
+                            Image(systemName: "xmark.circle.fill")
+                                .foregroundStyle(.red)
+                            Text("Exit")
+                                .font(.caption)
+                                .fontWeight(.medium)
+                                .foregroundStyle(.white)
+                        }
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 6)
+                        .background(.black.opacity(0.6))
+                        .cornerRadius(16)
+                    }
                     
                     // Loading indicator
                     if coordinator.isLoading {
@@ -336,6 +355,21 @@ struct MicroWorldView: View {
         }
         .onDisappear {
             appModel.immersiveSpaceState = .closed
+        }
+    }
+    
+    /// Create a completely isolated environment that blocks the room
+    private func createIsolatedEnvironment(content: RealityViewContent) {
+        print("🌑 Creating isolated environment with BlackSphere.usdz...")
+        Task { @MainActor in
+            // Load the large black sky sphere (must be in the app bundle)
+            if let blackSky = try? await Entity(named: "BlackSphere", in: .main) {
+                blackSky.transform.scale = [50, 50, 50] // Make it very large
+                content.add(blackSky)
+                print("✅ BlackSphere.usdz loaded and added as background")
+            } else {
+                print("❌ Could not load BlackSphere.usdz. Make sure it is in your app bundle.")
+            }
         }
     }
 }
