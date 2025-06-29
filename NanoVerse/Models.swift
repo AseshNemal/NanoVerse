@@ -132,9 +132,38 @@ class NanoVerseModelManager: ObservableObject {
     /// Update transform for a model
     func updateTransform(id: UUID, position: SIMD3<Float>? = nil, scale: SIMD3<Float>? = nil, rotation: SIMD3<Float>? = nil) {
         guard let idx = models.firstIndex(where: { $0.id == id }) else { return }
-        if let position = position { models[idx].position = position }
-        if let scale = scale { models[idx].scale = scale }
-        if let rotation = rotation { models[idx].rotation = rotation }
+        
+        // Update wrapper properties
+        if let position = position { 
+            models[idx].position = position 
+        }
+        if let scale = scale { 
+            models[idx].scale = scale 
+        }
+        if let rotation = rotation { 
+            models[idx].rotation = rotation 
+        }
+        
+        // Apply changes to the actual ModelEntity
+        let model = models[idx]
+        model.entity.position = model.position
+        model.entity.transform.scale = model.scale
+        
+        // Convert Euler angles to quaternion for rotation
+        // Create quaternion from Euler angles (X, Y, Z order)
+        let quaternion = simd_quatf(
+            angle: model.rotation.y,
+            axis: [0, 1, 0]
+        ) * simd_quatf(
+            angle: model.rotation.x,
+            axis: [1, 0, 0]
+        ) * simd_quatf(
+            angle: model.rotation.z,
+            axis: [0, 0, 1]
+        )
+        model.entity.transform.rotation = quaternion
+        
+        print("🔄 Updated transform for \(model.name): pos=\(model.position), scale=\(model.scale), rot=\(model.rotation)")
     }
 }
 

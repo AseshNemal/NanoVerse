@@ -15,14 +15,22 @@ import RealityKitContent
 class MicroWorldCoordinator: ObservableObject {
     @Published var isSpeaking = false
     @Published var isLoading = false
+    @Published var isPaused = false
     private var speechSynthesizer = AVSpeechSynthesizer()
     private var cancellable: EventSubscription?
+    private var currentModelEntity: ModelEntity?
+    private var modelManager: NanoVerseModelManager?
+    
+    /// Set the model manager reference
+    func setModelManager(_ manager: NanoVerseModelManager) {
+        self.modelManager = manager
+    }
     
     /// Reusable function to speak any text using text-to-speech
-    func speak(_ text: String, isImmersiveSpaceOpen: Bool) {
-        // Only speak if the immersive space is open
-        guard isImmersiveSpaceOpen else {
-            print("🔇 Speech disabled - immersive space not open")
+    func speak(_ text: String, isImmersiveSpaceOpen: Bool, voiceEnabled: Bool = true) {
+        // Only speak if the immersive space is open and voice is enabled
+        guard isImmersiveSpaceOpen && voiceEnabled else {
+            print("🔇 Speech disabled - immersive space not open or voice disabled")
             return
         }
         
@@ -98,7 +106,7 @@ class MicroWorldCoordinator: ObservableObject {
                 // Set the entity name and position
                 entity.name = modelName
                 entity.position = [0, 0, -1.5] // Move further back but still visible
-                entity.transform.scale = [0.5, 0.5, 0.5] // Make it larger
+                entity.transform.scale = [0.01, 0.01, 0.01] // Make it larger
                 
                 // Create an anchor and add the entity
                 let anchor = AnchorEntity(world: .zero)
@@ -114,6 +122,20 @@ class MicroWorldCoordinator: ObservableObject {
                     let deltaTime = Float(event.deltaTime)
                     let angle = rotationSpeed * deltaTime
                     entity.transform.rotation *= simd_quatf(angle: angle, axis: [0, 1, 0])
+                }
+                
+                // Find the actual ModelEntity for transform controls
+                if let modelEntity = entity as? ModelEntity {
+                    currentModelEntity = modelEntity
+                } else if let foundModelEntity = entity.findModelEntity() {
+                    currentModelEntity = foundModelEntity
+                } else {
+                    print("⚠️ Could not find ModelEntity for transform controls")
+                }
+                
+                // Update the model manager wrapper data to reflect the actual model state
+                if let modelManager = modelManager {
+                    updateModelManagerData(modelManager: modelManager)
                 }
                 
                 print("✅ \(modelName) model loaded successfully and rotating!")
@@ -166,6 +188,125 @@ class MicroWorldCoordinator: ObservableObject {
             }
             
             isLoading = false
+            currentModelEntity = cellEntity
+            
+            // Update the model manager wrapper data to reflect the actual model state
+            if let modelManager = modelManager {
+                updateModelManagerData(modelManager: modelManager)
+            }
+        }
+    }
+    
+    /// Apply transform to the current model
+    func applyTransform(position: SIMD3<Float>? = nil, scale: SIMD3<Float>? = nil, rotation: SIMD3<Float>? = nil) {
+        guard let entity = currentModelEntity else {
+            print("❌ No current model entity to transform")
+            return
+        }
+        
+        if let position = position {
+            entity.position = position
+            print("🔄 Applied position: \(position)")
+        }
+        
+        if let scale = scale {
+            entity.transform.scale = scale
+            print("🔄 Applied scale: \(scale)")
+        }
+        
+        if let rotation = rotation {
+            // Convert Euler angles to quaternion
+            let quaternion = simd_quatf(
+                angle: rotation.y,
+                axis: [0, 1, 0]
+            ) * simd_quatf(
+                angle: rotation.x,
+                axis: [1, 0, 0]
+            ) * simd_quatf(
+                angle: rotation.z,
+                axis: [0, 0, 1]
+            )
+            entity.transform.rotation = quaternion
+            print("🔄 Applied rotation: \(rotation)")
+        }
+        
+        // Update the model manager wrapper data to reflect the actual model state
+        if let modelManager = modelManager {
+            updateModelManagerData(modelManager: modelManager)
+        }
+    }
+    
+    /// Update the model manager wrapper data to match the actual model
+    private func updateModelManagerData(modelManager: NanoVerseModelManager) {
+        guard let entity = currentModelEntity else { 
+            print("❌ No current model entity to update wrapper data")
+            return 
+        }
+        
+        print("🔍 Looking for wrapper with name: \(entity.name)")
+        print("📋 Available models in manager: \(modelManager.models.map { $0.name })")
+        
+        // Find the corresponding wrapper in the model manager
+        if let wrapperIndex = modelManager.models.firstIndex(where: { $0.name == entity.name }) {
+            print("✅ Found wrapper at index \(wrapperIndex) for model: \(entity.name)")
+            
+            // Update the wrapper with the actual model's transform
+            modelManager.models[wrapperIndex].position = entity.position
+            modelManager.models[wrapperIndex].scale = entity.transform.scale
+            
+            // Convert quaternion back to Euler angles for the wrapper
+            let quaternion = entity.transform.rotation
+            // Extract Y rotation (simplified - you might want more complex conversion)
+            let w = quaternion.vector.w
+            let y = quaternion.vector.y
+            let x = quaternion.vector.x
+            let z = quaternion.vector.z
+            
+            let numerator = 2 * (w * y + x * z)
+            let denominator = 1 - 2 * (y * y + z * z)
+            let yRotation = atan2(numerator, denominator)
+            
+            modelManager.models[wrapperIndex].rotation = [0, yRotation, 0]
+            
+            // Ensure the current scene model is selected for transform controls
+            modelManager.selectedModelID = modelManager.models[wrapperIndex].id
+            
+            print("📊 Updated wrapper data: pos=\(entity.position), scale=\(entity.transform.scale)")
+            print("🎯 Set selected model ID to: \(modelManager.models[wrapperIndex].id)")
+        } else {
+            print("❌ No wrapper found for model: \(entity.name)")
+            print("💡 Creating a new wrapper for the current scene model...")
+            
+            // Create a new wrapper for the current scene model if it doesn't exist
+            let newWrapper = ModelEntityWrapper(
+                id: UUID(),
+                name: entity.name,
+                url: nil,
+                entity: entity,
+                position: entity.position,
+                scale: entity.transform.scale,
+                rotation: [0, 0, 0], // Will be updated below
+                isSelected: false
+            )
+            
+            // Convert quaternion to Euler angles
+            let quaternion = entity.transform.rotation
+            let w = quaternion.vector.w
+            let y = quaternion.vector.y
+            let x = quaternion.vector.x
+            let z = quaternion.vector.z
+            
+            let numerator = 2 * (w * y + x * z)
+            let denominator = 1 - 2 * (y * y + z * z)
+            let yRotation = atan2(numerator, denominator)
+            
+            var updatedWrapper = newWrapper
+            updatedWrapper.rotation = [0, yRotation, 0]
+            
+            modelManager.models.append(updatedWrapper)
+            modelManager.selectedModelID = updatedWrapper.id
+            
+            print("✅ Created new wrapper for \(entity.name) with ID: \(updatedWrapper.id)")
         }
     }
     
@@ -181,6 +322,7 @@ struct MicroWorldView: View {
     @StateObject private var coordinator = MicroWorldCoordinator()
     @Environment(AppModel.self) private var appModel
     @Environment(\.dismissImmersiveSpace) private var dismissImmersiveSpace
+    @State private var showDashboard = false
     
     var body: some View {
         ZStack {
@@ -202,157 +344,53 @@ struct MicroWorldView: View {
 
             // Overlay UI
             VStack {
-                // Debug info at the top
-                VStack(spacing: 4) {
-                    Text("Debug Info")
-                        .font(.caption)
-                        .fontWeight(.bold)
-                        .foregroundStyle(.yellow)
-                    
-                    Text("Scene: \(appModel.currentScene.rawValue)")
-                        .font(.caption)
-                        .foregroundStyle(.white)
-                    
-                    Text("Loading: \(coordinator.isLoading ? "Yes" : "No")")
-                        .font(.caption)
-                        .foregroundStyle(.white)
-                    
-                    Text("Speaking: \(coordinator.isSpeaking ? "Yes" : "No")")
-                        .font(.caption)
-                        .foregroundStyle(.white)
-                    
-                    Text("Immersive Space: \(appModel.immersiveSpaceState == .open ? "Open" : "Closed")")
-                        .font(.caption)
-                        .foregroundStyle(.white)
-                }
-                .padding(8)
-                .background(.black.opacity(0.7))
-                .cornerRadius(8)
-                .padding(.top, 50)
-                
-                Spacer()
-                
-                // Top status bar with exit button
+                // Floating Dashboard Toggle Button
                 HStack {
-                    Text(appModel.currentScene.rawValue)
-                        .font(.headline)
-                        .fontWeight(.semibold)
-                        .foregroundStyle(.white)
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 8)
-                        .background(.black.opacity(0.6))
-                        .cornerRadius(20)
-                    
                     Spacer()
                     
-                    // Exit button
                     Button {
-                        Task { @MainActor in
-                            appModel.immersiveSpaceState = .inTransition
-                            await dismissImmersiveSpace()
-                        }
+                        showDashboard.toggle()
                     } label: {
-                        HStack(spacing: 8) {
-                            Image(systemName: "xmark.circle.fill")
-                                .foregroundStyle(.red)
-                            Text("Exit")
-                                .font(.caption)
-                                .fontWeight(.medium)
-                                .foregroundStyle(.white)
-                        }
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 6)
-                        .background(.black.opacity(0.6))
-                        .cornerRadius(16)
+                        Image(systemName: showDashboard ? "xmark.circle.fill" : "gearshape.fill")
+                            .font(.title2)
+                            .foregroundStyle(.white)
+                            .padding(12)
+                            .background(.black.opacity(0.6))
+                            .clipShape(Circle())
                     }
-                    
-                    // Loading indicator
-                    if coordinator.isLoading {
-                        HStack(spacing: 8) {
-                            ProgressView()
-                                .scaleEffect(0.8)
-                                .progressViewStyle(CircularProgressViewStyle(tint: .blue))
-                            Text("Loading...")
-                                .font(.caption)
-                                .foregroundStyle(.white)
-                        }
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 6)
-                        .background(.black.opacity(0.6))
-                        .cornerRadius(16)
-                    }
-                    
-                    // Speaking indicator
-                    if coordinator.isSpeaking {
-                        HStack(spacing: 8) {
-                            Image(systemName: "speaker.wave.2.fill")
-                                .foregroundStyle(.green)
-                            Text("Speaking...")
-                                .font(.caption)
-                                .foregroundStyle(.white)
-                        }
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 6)
-                        .background(.black.opacity(0.6))
-                        .cornerRadius(16)
-                    }
+                    .padding(.top, 50)
+                    .padding(.trailing, 20)
                 }
-                .padding()
                 
                 Spacer()
-                
-                // Scene switching buttons
-                HStack(spacing: 12) {
-                    ForEach(AppModel.MicroWorldScene.allCases, id: \.self) { scene in
-                        Button {
-                            appModel.currentScene = scene
-                        } label: {
-                            Text(scene.rawValue)
-                                .font(.caption)
-                                .fontWeight(.medium)
-                                .foregroundStyle(appModel.currentScene == scene ? .white : .gray)
-                                .padding(.horizontal, 12)
-                                .padding(.vertical, 8)
-                                .background(appModel.currentScene == scene ? .blue : .black.opacity(0.3))
-                                .cornerRadius(8)
-                        }
-                    }
-                }
-                .padding(.horizontal)
-                
-                // Bottom controls
-                HStack {
-                    Button {
-                        // Safety check to ensure we have a valid scene
-                        let sceneDescription = appModel.currentScene.description
-                        coordinator.speak(sceneDescription, isImmersiveSpaceOpen: appModel.immersiveSpaceState == .open)
-                    } label: {
-                        HStack {
-                            Image(systemName: "speaker.wave.2.fill")
-                            Text("Narrate")
-                        }
-                        .font(.body)
-                        .fontWeight(.medium)
-                        .foregroundStyle(.white)
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 12)
-                        .background(.blue)
-                        .cornerRadius(12)
-                    }
-                    .disabled(coordinator.isSpeaking)
-                    
-                    Spacer()
-                }
-                .padding()
+            }
+            
+            // Dashboard Overlay
+            if showDashboard {
+                DashboardOverlay(
+                    appModel: appModel,
+                    coordinator: coordinator,
+                    modelManager: modelManager,
+                    dismissImmersiveSpace: dismissImmersiveSpace
+                )
+                .transition(.move(edge: .bottom).combined(with: .opacity))
             }
         }
         .onAppear {
             appModel.immersiveSpaceState = .open
+            appModel.sharedCoordinator = coordinator
+            coordinator.setModelManager(modelManager)
+            print("🎬 MicroWorldView appeared with scene: \(appModel.currentScene.rawValue)")
+            print("🎤 Current voice message: \(appModel.currentVoiceMessage)")
             // Only play narration if immersive space is open
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
-                let sceneDescription = appModel.currentScene.description
-                coordinator.speak(sceneDescription, isImmersiveSpaceOpen: appModel.immersiveSpaceState == .open)
+                let voiceMessage = appModel.currentVoiceMessage
+                coordinator.speak(voiceMessage, isImmersiveSpaceOpen: appModel.immersiveSpaceState == .open, voiceEnabled: appModel.voiceEnabled)
             }
+        }
+        .onChange(of: appModel.currentScene) { oldScene, newScene in
+            print("🔄 Scene changed from \(oldScene.rawValue) to \(newScene.rawValue)")
+            print("🎤 New voice message: \(appModel.currentVoiceMessage)")
         }
         .onDisappear {
             appModel.immersiveSpaceState = .closed
@@ -375,16 +413,15 @@ struct MicroWorldView: View {
             
             // Method 2: Try to load the SkyDome from RealityKitContent bundle
             if let skyDome = try? await Entity(named: "SkyDome", in: realityKitContentBundle) {
-                skyDome.transform.scale = [10, 10, 10] // Make it large
-                content.add(skyDome)
+               
                 print("✅ SkyDome.usdz loaded from RealityKitContent bundle")
             } else {
                 print("ℹ️ SkyDome.usdz not found in RealityKitContent bundle")
                 
                 // Fallback: try to load from main bundle
                 if let skyDome = try? await Entity(named: "SkyDome", in: .main) {
-                    skyDome.transform.scale = [10, 10, 10]
-                    content.add(skyDome)
+                    
+                    
                     print("✅ SkyDome.usdz loaded from main bundle")
                 } else {
                     print("ℹ️ SkyDome.usdz not found in main bundle either")
@@ -434,6 +471,198 @@ struct MicroWorldView: View {
             
             print("✅ Additional black walls created for complete environment isolation")
         }
+    }
+}
+
+// Dashboard Overlay for Immersive View
+struct DashboardOverlay: View {
+    let appModel: AppModel
+    let coordinator: MicroWorldCoordinator
+    let modelManager: NanoVerseModelManager
+    let dismissImmersiveSpace: DismissImmersiveSpaceAction
+    
+    var body: some View {
+        VStack(spacing: 20) {
+            // Header
+            HStack {
+                Text("NanoVerse Dashboard")
+                    .font(.title2)
+                    .fontWeight(.bold)
+                    .foregroundStyle(.white)
+                
+                Spacer()
+                
+                // Status indicators
+                HStack(spacing: 12) {
+                    if coordinator.isLoading {
+                        HStack(spacing: 6) {
+                            ProgressView()
+                                .scaleEffect(0.6)
+                                .progressViewStyle(CircularProgressViewStyle(tint: .blue))
+                            Text("Loading")
+                                .font(.caption)
+                                .foregroundStyle(.white)
+                        }
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(.blue.opacity(0.3))
+                        .cornerRadius(8)
+                    }
+                    
+                    if coordinator.isSpeaking {
+                        HStack(spacing: 6) {
+                            Image(systemName: "speaker.wave.2.fill")
+                                .foregroundStyle(.green)
+                            Text("Speaking")
+                                .font(.caption)
+                                .foregroundStyle(.white)
+                        }
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(.green.opacity(0.3))
+                        .cornerRadius(8)
+                    }
+                    
+                    if coordinator.isPaused {
+                        HStack(spacing: 6) {
+                            Image(systemName: "pause.circle.fill")
+                                .foregroundStyle(.orange)
+                            Text("Paused")
+                                .font(.caption)
+                                .foregroundStyle(.white)
+                        }
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(.orange.opacity(0.3))
+                        .cornerRadius(8)
+                    }
+                }
+            }
+            .padding()
+            .background(.black.opacity(0.8))
+            .cornerRadius(16)
+            
+            // Quick Actions
+            VStack(spacing: 16) {
+                Text("Quick Actions")
+                    .font(.headline)
+                    .fontWeight(.semibold)
+                    .foregroundStyle(.white)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                
+                LazyVGrid(columns: [
+                    GridItem(.flexible()),
+                    GridItem(.flexible())
+                ], spacing: 12) {
+                    // Exit Scene Button
+                    Button {
+                        Task { @MainActor in
+                            appModel.immersiveSpaceState = .inTransition
+                            await dismissImmersiveSpace()
+                        }
+                    } label: {
+                        VStack(spacing: 8) {
+                            Image(systemName: "xmark.circle.fill")
+                                .font(.title2)
+                                .foregroundStyle(.red)
+                            Text("Exit Scene")
+                                .font(.caption)
+                                .fontWeight(.medium)
+                                .foregroundStyle(.white)
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding(16)
+                        .background(.red.opacity(0.2))
+                        .cornerRadius(12)
+                    }
+                    
+                    // Change Scene Button
+                    Button {
+                        // Dismiss the dashboard to allow access to scene selection from main dashboard
+                        // Users can then use the main dashboard's scene selection
+                    } label: {
+                        VStack(spacing: 8) {
+                            Image(systemName: "cube.transparent.fill")
+                                .font(.title2)
+                                .foregroundStyle(.blue)
+                            Text("Change Scene")
+                                .font(.caption)
+                                .fontWeight(.medium)
+                                .foregroundStyle(.white)
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding(16)
+                        .background(.blue.opacity(0.2))
+                        .cornerRadius(12)
+                    }
+                    
+                    // Pause/Resume Button
+                    Button {
+                        coordinator.isPaused.toggle()
+                    } label: {
+                        VStack(spacing: 8) {
+                            Image(systemName: coordinator.isPaused ? "play.circle.fill" : "pause.circle.fill")
+                                .font(.title2)
+                                .foregroundStyle(.orange)
+                            Text(coordinator.isPaused ? "Resume" : "Pause")
+                                .font(.caption)
+                                .fontWeight(.medium)
+                                .foregroundStyle(.white)
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding(16)
+                        .background(.orange.opacity(0.2))
+                        .cornerRadius(12)
+                    }
+                    
+                    // Narrate Button
+                    Button {
+                        let voiceMessage = appModel.currentVoiceMessage
+                        coordinator.speak(voiceMessage, isImmersiveSpaceOpen: appModel.immersiveSpaceState == .open, voiceEnabled: appModel.voiceEnabled)
+                    } label: {
+                        VStack(spacing: 8) {
+                            Image(systemName: "speaker.wave.2.fill")
+                                .font(.title2)
+                                .foregroundStyle(.green)
+                            Text("Narrate")
+                                .font(.caption)
+                                .fontWeight(.medium)
+                                .foregroundStyle(.white)
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding(16)
+                        .background(.green.opacity(0.2))
+                        .cornerRadius(12)
+                    }
+                    .disabled(coordinator.isSpeaking)
+                }
+            }
+            .padding()
+            .background(.black.opacity(0.8))
+            .cornerRadius(16)
+            
+            // Current Scene Info
+            VStack(spacing: 8) {
+                Text("Current Scene: \(appModel.currentScene.rawValue)")
+                    .font(.headline)
+                    .fontWeight(.semibold)
+                    .foregroundStyle(.white)
+                
+                Text(appModel.hasCustomVoiceMessage(for: appModel.currentScene) ? "Custom Voice Active" : "Default Voice")
+                    .font(.caption)
+                    .foregroundStyle(appModel.hasCustomVoiceMessage(for: appModel.currentScene) ? .green : .gray)
+            }
+            .padding()
+            .background(.black.opacity(0.8))
+            .cornerRadius(16)
+            
+            Spacer()
+        }
+        .padding()
+        .background(.black.opacity(0.9))
+        .animation(.easeInOut(duration: 0.3), value: coordinator.isLoading)
+        .animation(.easeInOut(duration: 0.3), value: coordinator.isSpeaking)
+        .animation(.easeInOut(duration: 0.3), value: coordinator.isPaused)
     }
 }
 
