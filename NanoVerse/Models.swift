@@ -32,6 +32,9 @@ class NanoVerseModelManager: ObservableObject {
     @Published var errorMessage: String? = nil
     @Published var currentScene: AppModel.MicroWorldScene = .cell
     
+    // Callback for when models change
+    var onModelsChanged: (() -> Void)?
+    
     // Default model names in the app bundle
     let defaultModelNames = ["whiteBloodCell", "dnaStrand", "virus"]
     
@@ -78,37 +81,147 @@ class NanoVerseModelManager: ObservableObject {
         // TODO: Load from UserDefaults/FileManager
     }
     
-    /// Add a new model from a local file URL
+    /// Add a new model from a local file URL with improved error handling
     func addModel(from url: URL) async {
         do {
-            let entity = try await Entity.load(contentsOf: url)
-            guard let modelEntity = entity.findModelEntity() as? ModelEntity else {
-                await MainActor.run { self.errorMessage = "File does not contain a ModelEntity." }
+            print("📦 Loading model from: \(url)")
+            
+            // Basic file existence check only
+            guard FileManager.default.fileExists(atPath: url.path) else {
+                await MainActor.run { self.errorMessage = "File does not exist at the specified path." }
                 return
             }
+            
+            // Try to load the entity without strict validation
+            print("🔄 Attempting to load entity...")
+            let entity = try await Entity.load(contentsOf: url)
+            print("✅ Entity loaded successfully: \(entity.name)")
+            print("📋 Entity type: \(type(of: entity))")
+            print("📋 Entity children count: \(entity.children.count)")
+            
+            // Log entity hierarchy for debugging
+            if entity.children.count > 0 {
+                print("🔍 Entity hierarchy:")
+                for (index, child) in entity.children.enumerated() {
+                    print("  Child \(index): \(type(of: child)) - \(child.name)")
+                    if child.children.count > 0 {
+                        for (subIndex, subChild) in child.children.enumerated() {
+                            print("    Sub-child \(subIndex): \(type(of: subChild)) - \(subChild.name)")
+                        }
+                    }
+                }
+            }
+            
+            // Create a ModelEntity wrapper for any type of entity
+            print("🔄 Creating ModelEntity wrapper...")
+            let wrapperEntity = ModelEntity()
+            wrapperEntity.name = "ImportedModel_\(url.lastPathComponent)"
+            
+            // Add the loaded entity as a child
+            wrapperEntity.addChild(entity)
+            
+            print("✅ Created wrapper entity: \(wrapperEntity.name)")
+            
+            // Create wrapper
             let wrapper = ModelEntityWrapper(
                 id: UUID(),
                 name: url.lastPathComponent,
                 url: url,
-                entity: modelEntity,
+                entity: wrapperEntity,
                 position: [0, 0, -0.5],
                 scale: [0.5, 0.5, 0.5],
                 rotation: [0, 0, 0],
                 isSelected: false
             )
-            await MainActor.run { self.models.append(wrapper) }
+            
+            await MainActor.run { 
+                self.models.append(wrapper)
+                self.selectedModelID = wrapper.id
+                print("✅ Model added successfully: \(wrapper.name)")
+                
+                // Notify that models have changed
+                self.onModelsChanged?()
+            }
+            
         } catch {
-            await MainActor.run { self.errorMessage = "Failed to load model: \(error.localizedDescription)" }
+            print("❌ Failed to load model: \(error)")
+            print("📋 Error details: \(error.localizedDescription)")
+            
+            // Try to provide more helpful error messages
+            let errorMessage: String
+            if error.localizedDescription.contains("not found") {
+                errorMessage = "File not found or corrupted. Please check the file."
+            } else if error.localizedDescription.contains("format") {
+                errorMessage = "Unsupported file format. Try a different 3D model file."
+            } else if error.localizedDescription.contains("permission") {
+                errorMessage = "Permission denied. Please check file access."
+            } else {
+                errorMessage = "Failed to load model: \(error.localizedDescription)"
+            }
+            
+            await MainActor.run { 
+                self.errorMessage = errorMessage
+            }
         }
     }
     
     /// Add a new model from a remote HTTPS URL
     func addModel(fromRemote url: URL) async {
         do {
-            let (localURL, _) = try await URLSession.shared.download(from: url)
-            await addModel(from: localURL)
+            print("📥 Starting download from: \(url)")
+            
+            // Download the file
+            let (tempURL, response) = try await URLSession.shared.download(from: url)
+            
+            // Validate the response
+            guard let httpResponse = response as? HTTPURLResponse else {
+                await MainActor.run { self.errorMessage = "Invalid response from server." }
+                return
+            }
+            
+            guard httpResponse.statusCode == 200 else {
+                await MainActor.run { self.errorMessage = "Server returned error: \(httpResponse.statusCode)" }
+                return
+            }
+            
+            print("✅ Download completed. Temp file: \(tempURL)")
+            
+            // Basic file existence check
+            guard FileManager.default.fileExists(atPath: tempURL.path) else {
+                await MainActor.run { self.errorMessage = "Downloaded file not found." }
+                return
+            }
+            
+            // Create a permanent copy in the app's documents directory
+            let documentsDirectory = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
+            let fileName = "imported_\(UUID().uuidString).usdz"
+            let permanentURL = documentsDirectory.appendingPathComponent(fileName)
+            
+            try FileManager.default.copyItem(at: tempURL, to: permanentURL)
+            print("💾 File copied to permanent location: \(permanentURL)")
+            
+            // Now try to load the model from the permanent location
+            await addModel(from: permanentURL)
+            
         } catch {
-            await MainActor.run { self.errorMessage = "Failed to download model: \(error.localizedDescription)" }
+            print("❌ Download/import failed: \(error)")
+            print("📋 Error details: \(error.localizedDescription)")
+            
+            // Try to provide more helpful error messages
+            let errorMessage: String
+            if error.localizedDescription.contains("network") {
+                errorMessage = "Network error. Please check your internet connection."
+            } else if error.localizedDescription.contains("timeout") {
+                errorMessage = "Download timeout. Please try again."
+            } else if error.localizedDescription.contains("not found") {
+                errorMessage = "File not found on server. Please check the URL."
+            } else {
+                errorMessage = "Failed to download or import model: \(error.localizedDescription)"
+            }
+            
+            await MainActor.run { 
+                self.errorMessage = errorMessage
+            }
         }
     }
     
@@ -116,12 +229,18 @@ class NanoVerseModelManager: ObservableObject {
     func removeModel(id: UUID) {
         models.removeAll { $0.id == id }
         if selectedModelID == id { selectedModelID = models.first?.id }
+        
+        // Notify that models have changed
+        onModelsChanged?()
     }
     
     /// Remove all models
     func removeAllModels() {
         models.removeAll()
         selectedModelID = nil
+        
+        // Notify that models have changed
+        onModelsChanged?()
     }
     
     /// Select a model by ID
@@ -164,6 +283,67 @@ class NanoVerseModelManager: ObservableObject {
         model.entity.transform.rotation = quaternion
         
         print("🔄 Updated transform for \(model.name): pos=\(model.position), scale=\(model.scale), rot=\(model.rotation)")
+    }
+    
+    /// Validate if a file is a valid USDZ file
+    private func validateUSDZFile(at url: URL) -> Bool {
+        print("🔍 Validating file: \(url)")
+        
+        // Check if file exists
+        guard FileManager.default.fileExists(atPath: url.path) else {
+            print("❌ File does not exist at path: \(url.path)")
+            return false
+        }
+        
+        // Check file size (USDZ files should be at least a few KB)
+        do {
+            let fileAttributes = try FileManager.default.attributesOfItem(atPath: url.path)
+            let fileSize = fileAttributes[.size] as? Int64 ?? 0
+            print("📊 File size: \(fileSize) bytes")
+            
+            if fileSize == 0 {
+                print("❌ File is empty")
+                return false
+            }
+            
+            if fileSize < 50 { // Very small files are likely not valid
+                print("❌ File too small: \(fileSize) bytes")
+                return false
+            }
+            
+        } catch {
+            print("❌ Error reading file attributes: \(error)")
+            return false
+        }
+        
+        // Check file extension (be more lenient)
+        let fileExtension = url.pathExtension.lowercased()
+        print("📄 File extension: \(fileExtension)")
+        
+        // Accept common 3D file extensions
+        let validExtensions = ["usdz", "usd", "usda", "usdc"]
+        if !validExtensions.contains(fileExtension) {
+            print("❌ Invalid file extension: \(fileExtension)")
+            return false
+        }
+        
+        print("✅ File validation passed")
+        return true
+    }
+    
+    /// Clear the current error message
+    func clearErrorMessage() {
+        errorMessage = nil
+    }
+    
+    /// Clear error message after a delay
+    func clearErrorMessageAfterDelay(_ delay: TimeInterval = 5.0) {
+        Task {
+            try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+            await MainActor.run {
+                self.errorMessage = nil
+            }
+        }
     }
 }
 

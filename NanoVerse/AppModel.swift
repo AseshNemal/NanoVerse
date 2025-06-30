@@ -23,6 +23,7 @@ class AppModel {
         case cell = "Cell Scene"
         case dna = "DNA Scene"
         case virus = "Virus Scene"
+        case imported = "Imported Model"
         
         var description: String {
             switch self {
@@ -32,12 +33,15 @@ class AppModel {
                 return "Welcome to NanoVerse. This is a DNA strand."
             case .virus:
                 return "Welcome to NanoVerse. This is a virus particle."
+            case .imported:
+                return "Welcome to NanoVerse. This is an imported 3D model."
             }
         }
     }
     
     var immersiveSpaceState = ImmersiveSpaceState.closed
     var currentScene: MicroWorldScene = .dna
+    var selectedImportedModelID: UUID?
     var voiceEnabled: Bool = true
     var customVoiceMessages: [MicroWorldScene: String] = [:]
     var sharedCoordinator: MicroWorldCoordinator?
@@ -47,7 +51,12 @@ class AppModel {
         if let customMessage = customVoiceMessages[currentScene], !customMessage.isEmpty {
             return customMessage
         } else {
-            return currentScene.description
+            switch currentScene {
+            case .imported:
+                return "Welcome to NanoVerse. This is an imported 3D model."
+            default:
+                return currentScene.description
+            }
         }
     }
     

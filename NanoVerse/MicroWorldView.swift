@@ -20,10 +20,52 @@ class MicroWorldCoordinator: ObservableObject {
     private var cancellable: EventSubscription?
     private var currentModelEntity: ModelEntity?
     private var modelManager: NanoVerseModelManager?
+    var currentContent: RealityViewContent?
+    var currentScene: AppModel.MicroWorldScene?
     
     /// Set the model manager reference
     func setModelManager(_ manager: NanoVerseModelManager) {
         self.modelManager = manager
+    }
+    
+    /// Clear the current scene content
+    func clearCurrentScene() {
+        print("🧹 Clearing current scene...")
+        
+        // Cancel any ongoing animations
+        cancellable?.cancel()
+        cancellable = nil
+        
+        // Clear current model entity
+        currentModelEntity = nil
+        
+        // Clear content if available
+        if let content = currentContent {
+            // Remove all entities from the scene
+            content.entities.removeAll()
+            print("✅ Cleared all entities from scene")
+        }
+        
+        // Don't clear currentContent reference - we need to keep it
+        currentScene = nil
+    }
+    
+    /// Load a specific scene
+    func loadScene(_ scene: AppModel.MicroWorldScene, content: RealityViewContent) {
+        print("🔄 Loading scene: \(scene.rawValue)")
+        
+        // Clear any existing scene content but keep the content reference
+        clearCurrentScene()
+        
+        // Store references
+        currentContent = content
+        currentScene = scene
+        
+        // Set loading state
+        isLoading = true
+        
+        // Setup the scene with the new model
+        setup(content: content, scene: scene)
     }
     
     /// Reusable function to speak any text using text-to-speech
@@ -73,6 +115,27 @@ class MicroWorldCoordinator: ObservableObject {
     func setup(content: RealityViewContent, scene: AppModel.MicroWorldScene) {
         print("🚀 RealityView setup started for scene: \(scene.rawValue)")
         
+        // Clear any existing entities first
+        content.entities.removeAll()
+        
+        // Create isolated environment
+        createIsolatedEnvironment(content: content)
+        
+        // Load the default scene model
+        loadDefaultSceneModel(content: content, scene: scene)
+        
+        // Load any imported models
+        loadImportedModels(content: content)
+    }
+    
+    /// Load the default scene model (whiteBloodCell, dnaStrand, virus)
+    private func loadDefaultSceneModel(content: RealityViewContent, scene: AppModel.MicroWorldScene) {
+        // Handle imported scene type
+        if scene == .imported {
+            loadSelectedImportedModel(content: content)
+            return
+        }
+        
         // Choose model name based on current scene
         let modelName: String
         switch scene {
@@ -82,12 +145,12 @@ class MicroWorldCoordinator: ObservableObject {
             modelName = "dnaStrand"
         case .virus:
             modelName = "virus"
+        case .imported:
+            // This should not be reached, but just in case
+            modelName = "whiteBloodCell"
         }
 
-        print("🔍 Attempting to load model: \(modelName)")
-        
-        // Set loading state
-        isLoading = true
+        print("🔍 Attempting to load default model: \(modelName)")
         
         // Check if the model file exists in the bundle
         if let modelURL = Bundle.main.url(forResource: modelName, withExtension: "usdz") {
@@ -99,9 +162,9 @@ class MicroWorldCoordinator: ObservableObject {
         // Load the actual model
         Task { @MainActor in
             do {
-                print("📦 Loading \(modelName) model...")
+                print("📦 Loading \(modelName) model for scene: \(scene.rawValue)...")
                 let entity = try await Entity(named: modelName, in: Bundle.main)
-                print("📦 Entity loaded: \(entity.name)")
+                print("📦 Entity loaded: \(entity.name) for scene: \(scene.rawValue)")
                 
                 // Set the entity name and position
                 entity.name = modelName
@@ -113,7 +176,7 @@ class MicroWorldCoordinator: ObservableObject {
                 anchor.addChild(entity)
                 content.add(anchor)
                 
-                print("✅ \(modelName) model added to scene at position: \(entity.position) with scale: \(entity.transform.scale)")
+                print("✅ \(modelName) model added to scene \(scene.rawValue) at position: \(entity.position) with scale: \(entity.transform.scale)")
 
                 // Set up rotation animation
                 cancellable = content.subscribe(to: SceneEvents.Update.self) { [weak entity] event in
@@ -141,10 +204,116 @@ class MicroWorldCoordinator: ObservableObject {
                 print("✅ \(modelName) model loaded successfully and rotating!")
                 isLoading = false
             } catch {
-                print("❌ Failed to load \(modelName) model: \(error)")
-                print("📝 Falling back to sphere model...")
+                print("❌ Failed to load \(modelName) model for scene \(scene.rawValue): \(error)")
+                print("📝 Falling back to sphere model for scene \(scene.rawValue)...")
                 createFallbackSphere(content: content)
                 isLoading = false
+            }
+        }
+    }
+    
+    /// Load the selected imported model
+    private func loadSelectedImportedModel(content: RealityViewContent) {
+        guard let modelManager = modelManager else {
+            print("❌ No model manager available for loading imported model")
+            return
+        }
+        
+        // Find the selected imported model
+        let importedModels = modelManager.models.filter { $0.url != nil }
+        
+        if importedModels.isEmpty {
+            print("❌ No imported models available")
+            createFallbackSphere(content: content)
+            return
+        }
+        
+        // Get the selected model or use the first one
+        let selectedModel: ModelEntityWrapper
+        if let selectedID = modelManager.selectedModelID,
+           let found = importedModels.first(where: { $0.id == selectedID }) {
+            selectedModel = found
+        } else {
+            selectedModel = importedModels.first!
+        }
+        
+        print("📦 Loading selected imported model: \(selectedModel.name)")
+        
+        // Create an anchor for the imported model
+        let anchor = AnchorEntity(world: .zero)
+        
+        // Set the model's transform
+        selectedModel.entity.position = [0, 0, -1.5] // Center position
+        selectedModel.entity.transform.scale = [0.5, 0.5, 0.5] // Reasonable scale
+        
+        anchor.addChild(selectedModel.entity)
+        content.add(anchor)
+        
+        print("✅ Imported model \(selectedModel.name) added at position: \(selectedModel.entity.position)")
+        
+        // Set up rotation animation
+        cancellable = content.subscribe(to: SceneEvents.Update.self) { [weak entity = selectedModel.entity] event in
+            guard let entity = entity else { return }
+            let rotationSpeed = Float(0.2)
+            let deltaTime = Float(event.deltaTime)
+            let angle = rotationSpeed * deltaTime
+            entity.transform.rotation *= simd_quatf(angle: angle, axis: [0, 1, 0])
+        }
+        
+        // Set as current model entity
+        currentModelEntity = selectedModel.entity
+        
+        // Update the model manager wrapper data
+        updateModelManagerData(modelManager: modelManager)
+        
+        isLoading = false
+    }
+    
+    /// Load imported models from the model manager
+    private func loadImportedModels(content: RealityViewContent) {
+        guard let modelManager = modelManager else {
+            print("❌ No model manager available for loading imported models")
+            return
+        }
+        
+        // Don't load imported models if we're in imported scene mode
+        // (they'll be handled by loadSelectedImportedModel)
+        if let currentScene = currentScene, currentScene == .imported {
+            print("📦 Skipping imported models load - in imported scene mode")
+            return
+        }
+        
+        print("📦 Loading \(modelManager.models.count) imported models...")
+        
+        for (index, wrapper) in modelManager.models.enumerated() {
+            // Skip default models (they're loaded separately)
+            if wrapper.url != nil {
+                print("📦 Loading imported model: \(wrapper.name)")
+                
+                // Create an anchor for the imported model
+                let anchor = AnchorEntity(world: .zero)
+                
+                // Set the model's transform
+                wrapper.entity.position = wrapper.position
+                wrapper.entity.transform.scale = wrapper.scale
+                
+                // Convert Euler angles to quaternion for rotation
+                let quaternion = simd_quatf(
+                    angle: wrapper.rotation.y,
+                    axis: [0, 1, 0]
+                ) * simd_quatf(
+                    angle: wrapper.rotation.x,
+                    axis: [1, 0, 0]
+                ) * simd_quatf(
+                    angle: wrapper.rotation.z,
+                    axis: [0, 0, 1]
+                )
+                wrapper.entity.transform.rotation = quaternion
+                
+                anchor.addChild(wrapper.entity)
+                content.add(anchor)
+                
+                print("✅ Imported model \(wrapper.name) added at position: \(wrapper.position)")
             }
         }
     }
@@ -310,91 +479,16 @@ class MicroWorldCoordinator: ObservableObject {
         }
     }
     
-    deinit {
-        cancellable?.cancel()
-        speechSynthesizer.stopSpeaking(at: .immediate)
-    }
-}
-
-/// Main view for the microscopic world immersive scene
-struct MicroWorldView: View {
-    @ObservedObject var modelManager: NanoVerseModelManager
-    @StateObject private var coordinator = MicroWorldCoordinator()
-    @Environment(AppModel.self) private var appModel
-    @Environment(\.dismissImmersiveSpace) private var dismissImmersiveSpace
-    @State private var showDashboard = false
-    
-    var body: some View {
-        ZStack {
-            // Use RealityView with custom scene setup
-            RealityView { content in
-                print("🎬 RealityView content closure called!")
-                
-                // Create a completely isolated environment
-                createIsolatedEnvironment(content: content)
-                
-                // Load the model
-                coordinator.setup(content: content, scene: appModel.currentScene)
-            } update: { content in
-                // Handle updates if needed
-                print("🔄 RealityView update called!")
-            }
-            .id(appModel.currentScene)
-            .environment(\.colorScheme, .dark) // Force dark environment
-
-            // Overlay UI
-            VStack {
-                // Floating Dashboard Toggle Button
-                HStack {
-                    Spacer()
-                    
-                    Button {
-                        showDashboard.toggle()
-                    } label: {
-                        Image(systemName: showDashboard ? "xmark.circle.fill" : "gearshape.fill")
-                            .font(.title2)
-                            .foregroundStyle(.white)
-                            .padding(12)
-                            .background(.black.opacity(0.6))
-                            .clipShape(Circle())
-                    }
-                    .padding(.top, 50)
-                    .padding(.trailing, 20)
-                }
-                
-                Spacer()
-            }
-            
-            // Dashboard Overlay
-            if showDashboard {
-                DashboardOverlay(
-                    appModel: appModel,
-                    coordinator: coordinator,
-                    modelManager: modelManager,
-                    dismissImmersiveSpace: dismissImmersiveSpace
-                )
-                .transition(.move(edge: .bottom).combined(with: .opacity))
-            }
+    /// Handle scene change
+    func changeScene(to newScene: AppModel.MicroWorldScene) {
+        print("🔄 Changing scene to: \(newScene.rawValue)")
+        
+        guard let content = currentContent else {
+            print("❌ No content available for scene change")
+            return
         }
-        .onAppear {
-            appModel.immersiveSpaceState = .open
-            appModel.sharedCoordinator = coordinator
-            coordinator.setModelManager(modelManager)
-            print("🎬 MicroWorldView appeared with scene: \(appModel.currentScene.rawValue)")
-            print("🎤 Current voice message: \(appModel.currentVoiceMessage)")
-            // Only play narration if immersive space is open
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
-                let voiceMessage = appModel.currentVoiceMessage
-                coordinator.speak(voiceMessage, isImmersiveSpaceOpen: appModel.immersiveSpaceState == .open, voiceEnabled: appModel.voiceEnabled)
-            }
-        }
-        .onChange(of: appModel.currentScene) { oldScene, newScene in
-            print("🔄 Scene changed from \(oldScene.rawValue) to \(newScene.rawValue)")
-            print("🎤 New voice message: \(appModel.currentVoiceMessage)")
-        }
-        .onDisappear {
-            appModel.immersiveSpaceState = .closed
-        }
+        
+        loadScene(newScene, content: content)
     }
     
     /// Create a completely isolated environment that blocks the room
@@ -470,6 +564,133 @@ struct MicroWorldView: View {
             content.add(rightWall)
             
             print("✅ Additional black walls created for complete environment isolation")
+        }
+    }
+    
+    /// Refresh the scene to show updated models
+    func refreshScene() {
+        print("🔄 Refreshing scene to show updated models...")
+        
+        guard let content = currentContent, let scene = currentScene else {
+            print("❌ No content or scene available for refresh")
+            return
+        }
+        
+        // Reload the scene with current models
+        loadScene(scene, content: content)
+    }
+    
+    /// Notify that models have changed (called from outside)
+    func notifyModelsChanged() {
+        print("🔄 Models changed, notifying coordinator...")
+        refreshScene()
+    }
+    
+    deinit {
+        cancellable?.cancel()
+        speechSynthesizer.stopSpeaking(at: .immediate)
+    }
+}
+
+/// Main view for the microscopic world immersive scene
+struct MicroWorldView: View {
+    @ObservedObject var modelManager: NanoVerseModelManager
+    @StateObject private var coordinator = MicroWorldCoordinator()
+    @Environment(AppModel.self) private var appModel
+    @Environment(\.dismissImmersiveSpace) private var dismissImmersiveSpace
+    @State private var showDashboard = false
+    @State private var sceneVersion = 0 // Force RealityView updates
+    
+    var body: some View {
+        ZStack {
+            // Use RealityView with custom scene setup
+            RealityView { content in
+                print("🎬 RealityView content closure called!")
+                
+                // Store the content reference
+                coordinator.currentContent = content
+                
+                // Load the initial scene
+                coordinator.loadScene(appModel.currentScene, content: content)
+                
+            } update: { content in
+                // Handle updates if needed
+                print("🔄 RealityView update called!")
+            }
+            .id("scene-\(appModel.currentScene.rawValue)-\(sceneVersion)")
+            .environment(\.colorScheme, .dark) // Force dark environment
+
+            // Overlay UI
+            VStack {
+                // Floating Dashboard Toggle Button
+                HStack {
+                    Spacer()
+                    
+                    Button {
+                        showDashboard.toggle()
+                    } label: {
+                        Image(systemName: showDashboard ? "xmark.circle.fill" : "gearshape.fill")
+                            .font(.title2)
+                            .foregroundStyle(.white)
+                            .padding(12)
+                            .background(.black.opacity(0.6))
+                            .clipShape(Circle())
+                    }
+                    .padding(.top, 50)
+                    .padding(.trailing, 20)
+                }
+                
+                Spacer()
+            }
+            
+            // Dashboard Overlay
+            if showDashboard {
+                DashboardOverlay(
+                    appModel: appModel,
+                    coordinator: coordinator,
+                    modelManager: modelManager,
+                    dismissImmersiveSpace: dismissImmersiveSpace
+                )
+                .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
+        }
+        .onAppear {
+            appModel.immersiveSpaceState = .open
+            appModel.sharedCoordinator = coordinator
+            coordinator.setModelManager(modelManager)
+            
+            // Set up callback to refresh scene when models change
+            modelManager.onModelsChanged = {
+                sceneVersion += 1
+                coordinator.notifyModelsChanged()
+            }
+            
+            print("🎬 MicroWorldView appeared with scene: \(appModel.currentScene.rawValue)")
+            print("🎤 Current voice message: \(appModel.currentVoiceMessage)")
+            // Only play narration if immersive space is open
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                let voiceMessage = appModel.currentVoiceMessage
+                coordinator.speak(voiceMessage, isImmersiveSpaceOpen: appModel.immersiveSpaceState == .open, voiceEnabled: appModel.voiceEnabled)
+            }
+        }
+        .onChange(of: appModel.currentScene) { oldScene, newScene in
+            print("🔄 Scene changed from \(oldScene.rawValue) to \(newScene.rawValue)")
+            print("🎤 New voice message: \(appModel.currentVoiceMessage)")
+            
+            // Increment scene version to force RealityView update
+            sceneVersion += 1
+            
+            // Change to the new scene using the coordinator method
+            coordinator.changeScene(to: newScene)
+            
+            // Play the new scene's voice message after a delay
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
+                let voiceMessage = appModel.currentVoiceMessage
+                coordinator.speak(voiceMessage, isImmersiveSpaceOpen: appModel.immersiveSpaceState == .open, voiceEnabled: appModel.voiceEnabled)
+            }
+        }
+        .onDisappear {
+            appModel.immersiveSpaceState = .closed
         }
     }
 }

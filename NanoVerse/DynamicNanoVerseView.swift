@@ -55,7 +55,7 @@ struct DynamicNanoVerseView: View {
                 AboutView()
             }
             .sheet(isPresented: $showSceneSelection) {
-                SceneSelectionView()
+                SceneSelectionView(modelManager: modelManager)
             }
         }
     }
@@ -584,35 +584,61 @@ struct ModelImportControls: View {
     @Binding var remoteURLString: String
     
     var body: some View {
-        HStack(spacing: 12) {
-            Button {
-                showDocumentPicker = true
-            } label: {
-                Label("Select USDZ Model", systemImage: "plus.square.on.square")
-            }
-            .buttonStyle(.borderedProminent)
-            .fileImporter(isPresented: $showDocumentPicker, allowedContentTypes: [.usdz]) { result in
-                switch result {
-                case .success(let url):
-                    Task { await modelManager.addModel(from: url) }
-                case .failure(let error):
-                    modelManager.errorMessage = "Failed to import: \(error.localizedDescription)"
+        VStack(spacing: 16) {
+            // Error message display
+            if let errorMessage = modelManager.errorMessage {
+                HStack {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .foregroundStyle(.red)
+                    Text(errorMessage)
+                        .font(.body)
+                        .foregroundStyle(.red)
+                    Spacer()
+                    Button {
+                        modelManager.clearErrorMessage()
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .foregroundStyle(.red)
+                    }
+                }
+                .padding(12)
+                .background(.red.opacity(0.1))
+                .cornerRadius(8)
+                .onAppear {
+                    modelManager.clearErrorMessageAfterDelay(8.0)
                 }
             }
             
-            TextField("Remote .usdz URL", text: $remoteURLString)
-                .textFieldStyle(.roundedBorder)
-                .frame(width: 220)
-            Button {
-                guard let url = URL(string: remoteURLString), url.scheme == "https" else {
-                    modelManager.errorMessage = "Enter a valid HTTPS URL."
-                    return
+            HStack(spacing: 12) {
+                Button {
+                    showDocumentPicker = true
+                } label: {
+                    Label("Select USDZ Model", systemImage: "plus.square.on.square")
                 }
-                Task { await modelManager.addModel(fromRemote: url) }
-            } label: {
-                Label("Import from URL", systemImage: "icloud.and.arrow.down")
+                .buttonStyle(.borderedProminent)
+                .fileImporter(isPresented: $showDocumentPicker, allowedContentTypes: [.usdz, .data]) { result in
+                    switch result {
+                    case .success(let url):
+                        Task { await modelManager.addModel(from: url) }
+                    case .failure(let error):
+                        modelManager.errorMessage = "Failed to import: \(error.localizedDescription)"
+                    }
+                }
+                
+                TextField("Remote .usdz URL", text: $remoteURLString)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(width: 220)
+                Button {
+                    guard let url = URL(string: remoteURLString), url.scheme == "https" else {
+                        modelManager.errorMessage = "Enter a valid HTTPS URL."
+                        return
+                    }
+                    Task { await modelManager.addModel(fromRemote: url) }
+                } label: {
+                    Label("Import from URL", systemImage: "icloud.and.arrow.down")
+                }
+                .buttonStyle(.bordered)
             }
-            .buttonStyle(.bordered)
         }
     }
 }
@@ -822,6 +848,7 @@ struct ModelTransformControls: View {
 struct SceneSelectionView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(AppModel.self) private var appModel
+    @ObservedObject var modelManager: NanoVerseModelManager
     
     var body: some View {
         NavigationStack {
@@ -836,45 +863,38 @@ struct SceneSelectionView: View {
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
                 
-                LazyVGrid(columns: [GridItem(.flexible())], spacing: 16) {
-                    ForEach(AppModel.MicroWorldScene.allCases, id: \.self) { scene in
-                        Button {
-                            appModel.currentScene = scene
-                            dismiss()
-                        } label: {
-                            HStack {
-                                VStack(alignment: .leading, spacing: 4) {
-                                    Text(scene.rawValue)
-                                        .font(.headline)
-                                        .fontWeight(.semibold)
-                                        .foregroundStyle(.primary)
-                                    
-                                    Text(scene.description)
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
-                                        .lineLimit(2)
-                                }
+                ScrollView {
+                    LazyVGrid(columns: [GridItem(.flexible())], spacing: 16) {
+                        // Default Scenes Section
+                        VStack(alignment: .leading, spacing: 12) {
+                            Text("Default Scenes")
+                                .font(.headline)
+                                .fontWeight(.semibold)
+                                .foregroundStyle(.primary)
+                                .padding(.horizontal)
+                            
+                            ForEach(AppModel.MicroWorldScene.allCases.filter { $0 != .imported }, id: \.self) { scene in
+                                DefaultSceneButton(scene: scene, appModel: appModel, dismiss: dismiss)
+                            }
+                        }
+                        
+                        // Imported Models Section
+                        if !modelManager.models.filter({ $0.url != nil }).isEmpty {
+                            VStack(alignment: .leading, spacing: 12) {
+                                Text("Imported Models")
+                                    .font(.headline)
+                                    .fontWeight(.semibold)
+                                    .foregroundStyle(.primary)
+                                    .padding(.horizontal)
                                 
-                                Spacer()
-                                
-                                if appModel.currentScene == scene {
-                                    Image(systemName: "checkmark.circle.fill")
-                                        .foregroundStyle(.blue)
-                                        .font(.title2)
+                                ForEach(modelManager.models.filter { $0.url != nil }) { model in
+                                    ImportedModelButton(model: model, appModel: appModel, modelManager: modelManager, dismiss: dismiss)
                                 }
                             }
-                            .padding()
-                            .background(appModel.currentScene == scene ? .blue.opacity(0.1) : .gray.opacity(0.1))
-                            .cornerRadius(12)
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 12)
-                                    .stroke(appModel.currentScene == scene ? .blue : .clear, lineWidth: 2)
-                            )
                         }
-                        .buttonStyle(.plain)
                     }
+                    .padding(.horizontal)
                 }
-                .padding(.horizontal)
                 
                 Spacer()
             }
@@ -888,6 +908,96 @@ struct SceneSelectionView: View {
                 }
             }
         }
+    }
+}
+
+struct DefaultSceneButton: View {
+    let scene: AppModel.MicroWorldScene
+    let appModel: AppModel
+    let dismiss: DismissAction
+    
+    var body: some View {
+        Button {
+            appModel.currentScene = scene
+            appModel.selectedImportedModelID = nil // Clear imported model selection
+            dismiss()
+        } label: {
+            HStack {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(scene.rawValue)
+                        .font(.headline)
+                        .fontWeight(.semibold)
+                        .foregroundStyle(.primary)
+                    
+                    Text(scene.description)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                }
+                
+                Spacer()
+                
+                if appModel.currentScene == scene && appModel.selectedImportedModelID == nil {
+                    Image(systemName: "checkmark.circle.fill")
+                        .foregroundStyle(.blue)
+                        .font(.title2)
+                }
+            }
+            .padding()
+            .background((appModel.currentScene == scene && appModel.selectedImportedModelID == nil) ? .blue.opacity(0.1) : .gray.opacity(0.1))
+            .cornerRadius(12)
+            .overlay(
+                RoundedRectangle(cornerRadius: 12)
+                    .stroke((appModel.currentScene == scene && appModel.selectedImportedModelID == nil) ? .blue : .clear, lineWidth: 2)
+            )
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+struct ImportedModelButton: View {
+    let model: ModelEntityWrapper
+    let appModel: AppModel
+    let modelManager: NanoVerseModelManager
+    let dismiss: DismissAction
+    
+    var body: some View {
+        Button {
+            appModel.currentScene = .imported
+            appModel.selectedImportedModelID = model.id
+            modelManager.selectModel(id: model.id)
+            dismiss()
+        } label: {
+            HStack {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(model.name)
+                        .font(.headline)
+                        .fontWeight(.semibold)
+                        .foregroundStyle(.primary)
+                    
+                    Text("Imported 3D Model")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                }
+                
+                Spacer()
+                
+                if appModel.currentScene == .imported && appModel.selectedImportedModelID == model.id {
+                    Image(systemName: "checkmark.circle.fill")
+                        .foregroundStyle(.green)
+                        .font(.title2)
+                }
+            }
+            .padding()
+            .background((appModel.currentScene == .imported && appModel.selectedImportedModelID == model.id) ? .green.opacity(0.1) : .gray.opacity(0.1))
+            .cornerRadius(12)
+            .overlay(
+                RoundedRectangle(cornerRadius: 12)
+                    .stroke((appModel.currentScene == .imported && appModel.selectedImportedModelID == model.id) ? .green : .clear, lineWidth: 2)
+            )
+        }
+        .buttonStyle(.plain)
     }
 }
 
@@ -1019,3 +1129,4 @@ struct CustomVoiceRow: View {
         .cornerRadius(12)
     }
 } 
+
