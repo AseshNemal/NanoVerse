@@ -605,6 +605,12 @@ class MicroWorldCoordinator: ObservableObject {
         refreshScene()
     }
     
+    // Public method to stop speech immediately
+    func stopSpeech() {
+        speechSynthesizer.stopSpeaking(at: .immediate)
+        isSpeaking = false
+    }
+    
     deinit {
         cancellable?.cancel()
         speechSynthesizer.stopSpeaking(at: .immediate)
@@ -710,6 +716,7 @@ struct MicroWorldView: View {
         }
         .onDisappear {
             appModel.immersiveSpaceState = .closed
+            coordinator.stopSpeech() // Stop any ongoing speech when scene disappears
         }
     }
 }
