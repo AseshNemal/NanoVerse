@@ -167,6 +167,27 @@ struct DynamicNanoVerseView: View {
     private var mainEnterButton: some View {
         Button(action: {
             Task {
+                // If there's a selected model, set the appropriate scene
+                if let selectedID = modelManager.selectedModelID,
+                   let selectedModel = modelManager.models.first(where: { $0.id == selectedID }) {
+                    if selectedModel.url != nil {
+                        // For imported models
+                        appModel.currentScene = .imported
+                        appModel.selectedImportedModelID = selectedID
+                    } else {
+                        // For default models (DNA, Cell, Virus)
+                        switch selectedModel.name {
+                        case "dnaStrand":
+                            appModel.currentScene = .dna
+                        case "whiteBloodCell":
+                            appModel.currentScene = .cell
+                        case "virus":
+                            appModel.currentScene = .virus
+                        default:
+                            break
+                        }
+                    }
+                }
                 await openImmersiveSpace(id: "NanoVerseImmersiveSpace")
             }
         }) {
@@ -364,8 +385,34 @@ struct DynamicNanoVerseView: View {
     
     @ViewBuilder
     private var modelListView: some View {
-        ModelListView(modelManager: modelManager)
-            .padding(.vertical, 20)
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 16) {
+                ForEach(modelManager.models) { model in
+                    Button {
+                        modelManager.selectModel(id: model.id)
+                        
+                        // If this is an imported model, update the scene and selected ID
+                        if model.url != nil {
+                            appModel.currentScene = .imported
+                            appModel.selectedImportedModelID = model.id
+                        }
+                    } label: {
+                        VStack {
+                            Image(systemName: modelManager.selectedModelID == model.id ? "cube.fill" : "cube")
+                                .font(.largeTitle)
+                                .foregroundStyle(modelManager.selectedModelID == model.id ? .blue : .gray)
+                            Text(model.name)
+                                .font(.caption)
+                                .foregroundStyle(.primary)
+                        }
+                        .padding(8)
+                        .background(modelManager.selectedModelID == model.id ? .blue.opacity(0.15) : .clear)
+                        .cornerRadius(10)
+                    }
+                }
+            }
+            .padding(.horizontal)
+        }
     }
     
     @ViewBuilder
@@ -639,34 +686,6 @@ struct ModelImportControls: View {
                 }
                 .buttonStyle(.bordered)
             }
-        }
-    }
-}
-
-struct ModelListView: View {
-    @ObservedObject var modelManager: NanoVerseModelManager
-    var body: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 16) {
-                ForEach(modelManager.models) { model in
-                    Button {
-                        modelManager.selectModel(id: model.id)
-                    } label: {
-                        VStack {
-                            Image(systemName: modelManager.selectedModelID == model.id ? "cube.fill" : "cube")
-                                .font(.largeTitle)
-                                .foregroundStyle(modelManager.selectedModelID == model.id ? .blue : .gray)
-                            Text(model.name)
-                                .font(.caption)
-                                .foregroundStyle(.primary)
-                        }
-                        .padding(8)
-                        .background(modelManager.selectedModelID == model.id ? .blue.opacity(0.15) : .clear)
-                        .cornerRadius(10)
-                    }
-                }
-            }
-            .padding(.horizontal)
         }
     }
 }

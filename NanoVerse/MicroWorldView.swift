@@ -169,7 +169,18 @@ class MicroWorldCoordinator: ObservableObject {
                 // Set the entity name and position
                 entity.name = modelName
                 entity.position = [0, 0, -1.5] // Move further back but still visible
-                entity.transform.scale = [0.01, 0.01, 0.01] // Make it larger
+                
+                // Set scale based on model type
+                switch scene {
+                case .virus:
+                    entity.transform.scale = [0.5, 0.5, 0.5] // Make virus much larger
+                case .cell:
+                    entity.transform.scale = [0.01, 0.01, 0.01] // Keep cell at original scale
+                case .dna:
+                    entity.transform.scale = [0.01, 0.01, 0.01] // Keep DNA at original scale
+                case .imported:
+                    entity.transform.scale = [0.01, 0.01, 0.01] // Default scale
+                }
                 
                 // Create an anchor and add the entity
                 let anchor = AnchorEntity(world: .zero)
@@ -400,8 +411,16 @@ class MicroWorldCoordinator: ObservableObject {
         }
         
         // Update the model manager wrapper data to reflect the actual model state
-        if let modelManager = modelManager {
-            updateModelManagerData(modelManager: modelManager)
+        if let modelManager = modelManager,
+           let modelID = modelManager.selectedModelID {
+            // Update the model manager with the new transform
+            modelManager.updateTransform(
+                id: modelID,
+                position: position,
+                scale: scale,
+                rotation: rotation
+            )
+            print("✅ Updated model manager with new transform")
         }
     }
     
