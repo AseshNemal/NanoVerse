@@ -172,8 +172,9 @@ struct DynamicNanoVerseView: View {
                    let selectedModel = modelManager.models.first(where: { $0.id == selectedID }) {
                     if selectedModel.url != nil {
                         // For imported models
+                        modelManager.selectModel(id: selectedModel.id)
                         appModel.currentScene = .imported
-                        appModel.selectedImportedModelID = selectedID
+                        appModel.selectedImportedModelID = selectedModel.id
                     } else {
                         // For default models (DNA, Cell, Virus)
                         switch selectedModel.name {
@@ -389,12 +390,17 @@ struct DynamicNanoVerseView: View {
             HStack(spacing: 16) {
                 ForEach(modelManager.models) { model in
                     Button {
-                        modelManager.selectModel(id: model.id)
-                        
                         // If this is an imported model, update the scene and selected ID
                         if model.url != nil {
+                            modelManager.selectModel(id: model.id)
                             appModel.currentScene = .imported
                             appModel.selectedImportedModelID = model.id
+                            // If immersive space is open, update the immersive scene immediately
+                            if appModel.immersiveSpaceState == .open, let coordinator = appModel.sharedCoordinator {
+                                coordinator.changeScene(to: .imported)
+                            }
+                        } else {
+                            modelManager.selectModel(id: model.id)
                         }
                     } label: {
                         VStack {
